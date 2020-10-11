@@ -1,7 +1,9 @@
 import click
+import time
 from bitshares.account import Account
 from bitshares.amount import Amount
 from bitshares.asset import Asset
+from bitshares.market import Market
 from bitshares.price import Price
 from .decorators import online, unlock
 from .main import main, config
@@ -348,3 +350,81 @@ def describe(ctx, pool, slip, slip_buy, verbose):
         print_table(t)
     else:
         print_message("Could not retrieve pool object", "warning")
+
+
+_candles = {
+    "1m": {"hrmod": 1, "minmod": 1, "trigger": 10, "wash": 3},
+    "5m": {"hrmod": 1, "minmod": 5, "trigger": 20, "wash": 9},
+    "1h": {"hrmod": 1, "minmod": 60, "trigger": 30, "wash": 30},
+}
+
+
+@pool.command()
+@click.argument("pool")
+@click.option("--yes", is_flag=True, help="Without this flag, assume dry run")
+@click.option("--candle", type=click.Choice(_candles.keys()), default="1h")
+@click.option(
+    "--account", help="Active account (else use wallet default).",
+    default=config["default_account"], type=str
+)
+@click.pass_context
+@online
+@unlock
+def pricewalk(ctx, pool, yes, candle, account):
+    """ Paint price data on poolshare markets.
+
+    """
+    candle_name = candle
+    candle = _candles[candle]
+    pool_id = ctx.bitshares._find_liquidity_pool(pool) # ad hoc
+    data = ctx.bitshares.rpc.get_object(pool_id)
+    share_asset = Asset(data.pop("share_asset"), blockchain_instance=ctx.bitshares)
+    tidbit = Amount(1.0/10**3, share_asset)
+    print("Trading tidbits of %s on %s candles..."%(tidbit, candle_name))
+    while True:
+        print("Awaiting next %s candle... (ctrl-c to exit)"%(candle_name))
+        _wait_next_candle(ctx, candle)
+        (price_a, price_b) = _get_current_share_prices(ctx, pool_id)
+        print("Got prices of:  [%s] and [%s]."%(price_a.as_quote(share_asset["symbol"]),
+                                                price_b.as_quote(share_asset["symbol"])))
+        _wash(ctx, tidbit, [price_a, price_b], account, candle)
+        time.sleep(candle["trigger"]) # ensure out of trigger window
+
+
+def _get_current_share_prices(ctx, pool_id):
+    data = ctx.bitshares.rpc.get_object(pool_id)
+    asset_a = Asset(data.pop("asset_a"), blockchain_instance=ctx.bitshares)
+    asset_b = Asset(data.pop("asset_b"), blockchain_instance=ctx.bitshares)
+    share_asset = Asset(data.pop("share_asset"), blockchain_instance=ctx.bitshares)
+    share_ddo = ctx.bitshares.rpc.get_object(share_asset["dynamic_asset_data_id"])
+    share_supply = int(share_ddo["current_supply"])
+    share_supply = Amount(share_supply/10**share_asset.precision, share_asset)
+    amount_a = Amount(int(data.pop("balance_a"))/10**asset_a.precision, asset_a)
+    amount_b = Amount(int(data.pop("balance_b"))/10**asset_b.precision, asset_b)
+    # Share price quoted in component assets.
+    # Note: Pool-Price Assumption assumes share value is twice its
+    # claim on a single component asset.
+    price_a = Price(quote=share_supply, base=(amount_a+amount_a))
+    price_b = Price(quote=share_supply, base=(amount_b+amount_b))
+    return (price_a, price_b)
+
+def _wait_next_candle(ctx, candle):
+    while True:
+        blocktime = ctx.blockchain.info()["time"]
+        cur_seconds = int(blocktime.split(":")[-1])
+        cur_minmod = int(blocktime.split(":")[-2]) % candle["minmod"]
+        if cur_minmod == 0 and cur_seconds <= candle["trigger"]:
+            break
+        else:
+            time.sleep(3)
+
+def _wash(ctx, tidbit_amnt, pricelist, account, candle):
+
+    if not isinstance(pricelist, list):
+        pricelist = [pricelist]
+
+    ctx.blockchain.blocking = True
+    for price in pricelist:
+        tx1 = price.market.buy(price, tidbit_amnt, account=account)
+        tx2 = price.market.sell(price, tidbit_amnt, account=account)
+        time.sleep(candle["wash"])
