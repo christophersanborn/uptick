@@ -411,7 +411,7 @@ def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
             (price_a, price_b) = _get_current_share_prices(ctx, pool["id"])
             prices_this_round.extend([price_a, price_b])
             if not logonly:
-                _wash(ctx, tidbit, [price_a, price_b], account, candle)
+                _wash(ctx, pool["tidbit"], [price_a, price_b], account, candle)
             else:
                 time.sleep(candle["wash"])
         logstr = blocktime
