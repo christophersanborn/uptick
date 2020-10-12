@@ -368,6 +368,10 @@ def _callback_dry_run(ctx, param, value):
 @click.argument("pools", type=str, nargs=-1)
 @click.option("--fee", is_flag=True, help="Factor withdrawal fee into price evaluation.")
 @click.option("--candle", type=click.Choice(_candles.keys()), default="1h")
+@click.option("--secondary", type=str,
+    multiple=True, default=[],
+    help="Use this secondary market to derive price in core token."
+)
 @click.option("--logfile", type=str, help="Log prices to this file.")
 @click.option("--logonly",
     is_flag=True, help="Don't trade, just log prices.",
@@ -380,12 +384,14 @@ def _callback_dry_run(ctx, param, value):
 @click.pass_context
 @online
 @unlock
-def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
+def pricewalk(ctx, pools, fee, candle, secondary, logfile, logonly, account):
     """ Paint price data on poolshare markets.
 
     """
     candle_name = candle
     candle = _candles[candle]
+    secondary_symbols = secondary
+    secondary = [ctx.bitshares._find_liquidity_pool(se) for se in secondary_symbols]
     pool_symbols = pools
     pools = []
     for pool in pool_symbols:
@@ -401,6 +407,10 @@ def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
         pools.append(p)
     if fee:
         print("Computed prices will be discounted by their withdrawal fee amount.")
+    if len(secondary) > 0:
+        print("Will search secondary markets to establish core asset price equivalents.")
+    if logonly:
+        print("Log-only mode: not broadcasting transactions.")
     while True:
         print("Awaiting next %s candle... (ctrl-c to quit)%s"%(
             candle_name,
@@ -410,10 +420,11 @@ def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
         print("Candle triggered at blocktime %s. Doing stuff..."%blocktime)
         prices_this_round = []
         for pool in pools:
-            (price_a, price_b) = _get_current_share_prices(ctx, pool["id"], fee)
-            prices_this_round.extend([price_a, price_b])
+            prices = _get_current_share_prices(ctx, pool["id"], fee)
+            prices = _add_core_price(ctx, prices, secondary)
+            prices_this_round.extend(prices)
             if not logonly:
-                _wash(ctx, pool["tidbit"], [price_a, price_b], account, candle)
+                _wash(ctx, pool["tidbit"], prices, account, candle)
             else:
                 time.sleep(candle["wash"])
         logstr = blocktime
@@ -425,6 +436,31 @@ def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
                 f.write(logstr+"\n")
         time.sleep(candle["trigger"]) # ensure out of trigger window
 
+def _get_pool_price(ctx, pool_id):
+    """ Get asset_a/asset_b price. """
+    data = ctx.bitshares.rpc.get_object(pool_id)
+    asset_a = Asset(data.pop("asset_a"), blockchain_instance=ctx.bitshares)
+    asset_b = Asset(data.pop("asset_b"), blockchain_instance=ctx.bitshares)
+    amount_a = Amount(int(data.pop("balance_a"))/10**asset_a.precision, asset_a)
+    amount_b = Amount(int(data.pop("balance_b"))/10**asset_b.precision, asset_b)
+    price = Price(base=amount_a, quote=amount_b)
+    return price
+
+def _add_core_price(ctx, prices_in, secondary):
+    """If prices don't include one against BTS then try to add a price in BTS.
+    """
+    havecoreprice = False
+    prices = prices_in.copy()
+    for pr in prices_in:
+        if pr["base"]["asset"]["id"]=="1.3.0":
+            havecoreprice = True
+    if not havecoreprice:
+        for pr in prices_in:
+            for se in secondary:
+                sepr = _get_pool_price(ctx, se)
+                if pr["base"]["asset"] == sepr["quote"]["asset"]:
+                    prices.append(pr * sepr)
+    return prices
 
 def _get_current_share_prices(ctx, pool_id, discountfee=False):
     """Determine share prices wrt component assets based on share claim against
@@ -445,7 +481,7 @@ def _get_current_share_prices(ctx, pool_id, discountfee=False):
     weight = 2.0 * ((1.0-withdrawal_fee) if discountfee else 1.0)
     price_a = Price(quote=share_supply, base=(amount_a*weight))
     price_b = Price(quote=share_supply, base=(amount_b*weight))
-    return (price_a, price_b)
+    return [price_a, price_b]
 
 def _wait_next_candle(ctx, candle):
     while True:
