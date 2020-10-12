@@ -1,5 +1,6 @@
 import click
 import time
+import os
 from bitshares.account import Account
 from bitshares.amount import Amount
 from bitshares.asset import Asset
@@ -358,11 +359,20 @@ _candles = {
     "1h": {"hrmod": 1, "minmod": 60, "trigger": 30, "wash": 30},
 }
 
+def _callback_dry_run(ctx, param, value):
+    if value:
+        ctx.obj['unsigned'] = True
+    return value
 
 @pool.command()
-@click.argument("pool")
-@click.option("--yes", is_flag=True, help="Without this flag, assume dry run")
+@click.argument("pools", type=str, nargs=-1)
+@click.option("--fee", is_flag=True, help="Factor withdrawal fee into price evaluation.")
 @click.option("--candle", type=click.Choice(_candles.keys()), default="1h")
+@click.option("--logfile", type=str, help="Log prices to this file.")
+@click.option("--logonly",
+    is_flag=True, help="Don't trade, just log prices.",
+    default=False, callback=_callback_dry_run, is_eager=True,
+)
 @click.option(
     "--account", help="Active account (else use wallet default).",
     default=config["default_account"], type=str
@@ -370,24 +380,47 @@ _candles = {
 @click.pass_context
 @online
 @unlock
-def pricewalk(ctx, pool, yes, candle, account):
+def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
     """ Paint price data on poolshare markets.
 
     """
     candle_name = candle
     candle = _candles[candle]
-    pool_id = ctx.bitshares._find_liquidity_pool(pool) # ad hoc
-    data = ctx.bitshares.rpc.get_object(pool_id)
-    share_asset = Asset(data.pop("share_asset"), blockchain_instance=ctx.bitshares)
-    tidbit = Amount(1.0/10**3, share_asset)
-    print("Trading tidbits of %s on %s candles..."%(tidbit, candle_name))
+    pool_symbols = pools
+    pools = []
+    for pool in pool_symbols:
+        p_id = ctx.bitshares._find_liquidity_pool(pool) # ad hoc
+        data = ctx.bitshares.rpc.get_object(p_id)
+        share_asset = Asset(data.pop("share_asset"), blockchain_instance=ctx.bitshares)
+        p = {
+            "id": p_id,
+            "share_asset": share_asset,
+            "tidbit": Amount(1.0/10**3, share_asset),
+        }
+        print("Trading tidbits of %s on %s candles..."%(p["tidbit"], candle_name))
+        pools.append(p)
+
     while True:
-        print("Awaiting next %s candle... (ctrl-c to exit)"%(candle_name))
-        _wait_next_candle(ctx, candle)
-        (price_a, price_b) = _get_current_share_prices(ctx, pool_id)
-        print("Got prices of:  [%s] and [%s]."%(price_a.as_quote(share_asset["symbol"]),
-                                                price_b.as_quote(share_asset["symbol"])))
-        _wash(ctx, tidbit, [price_a, price_b], account, candle)
+        print("Awaiting next %s candle... (ctrl-c to quit)%s"%(
+            candle_name,
+            (" [Screen session: %s]"%os.environ["STY"]) if "STY" in os.environ else ""
+        ))
+        blocktime = _wait_next_candle(ctx, candle)
+        prices_this_round = []
+        for pool in pools:
+            (price_a, price_b) = _get_current_share_prices(ctx, pool["id"])
+            prices_this_round.extend([price_a, price_b])
+            if not logonly:
+                _wash(ctx, tidbit, [price_a, price_b], account, candle)
+            else:
+                time.sleep(candle["wash"])
+        logstr = blocktime
+        for pr in prices_this_round:
+            logstr += " %s"%pr
+        print(logstr)
+        if logfile:
+            with open(logfile, 'a') as f:
+                f.write(logstr+"\n")
         time.sleep(candle["trigger"]) # ensure out of trigger window
 
 
@@ -417,6 +450,7 @@ def _wait_next_candle(ctx, candle):
             break
         else:
             time.sleep(3)
+    return blocktime
 
 def _wash(ctx, tidbit_amnt, pricelist, account, candle):
 
