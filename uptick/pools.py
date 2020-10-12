@@ -399,16 +399,18 @@ def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
         }
         print("Trading tidbits of %s on %s candles..."%(p["tidbit"], candle_name))
         pools.append(p)
-
+    if fee:
+        print("Computed prices will be discounted by their withdrawal fee amount.")
     while True:
         print("Awaiting next %s candle... (ctrl-c to quit)%s"%(
             candle_name,
             (" [Screen session: %s]"%os.environ["STY"]) if "STY" in os.environ else ""
         ))
         blocktime = _wait_next_candle(ctx, candle)
+        print("Candle triggered at blocktime %s. Doing stuff..."%blocktime)
         prices_this_round = []
         for pool in pools:
-            (price_a, price_b) = _get_current_share_prices(ctx, pool["id"])
+            (price_a, price_b) = _get_current_share_prices(ctx, pool["id"], fee)
             prices_this_round.extend([price_a, price_b])
             if not logonly:
                 _wash(ctx, pool["tidbit"], [price_a, price_b], account, candle)
@@ -424,7 +426,12 @@ def pricewalk(ctx, pools, fee, candle, logfile, logonly, account):
         time.sleep(candle["trigger"]) # ensure out of trigger window
 
 
-def _get_current_share_prices(ctx, pool_id):
+def _get_current_share_prices(ctx, pool_id, discountfee=False):
+    """Determine share prices wrt component assets based on share claim against
+       those assets. Note, against each asset, pool share is worth a double
+       claim, based on assumption that both assets are held in equal quantity.
+       Returns price reduced by withdrawal fee if discountfee is true.
+    """
     data = ctx.bitshares.rpc.get_object(pool_id)
     asset_a = Asset(data.pop("asset_a"), blockchain_instance=ctx.bitshares)
     asset_b = Asset(data.pop("asset_b"), blockchain_instance=ctx.bitshares)
@@ -434,11 +441,10 @@ def _get_current_share_prices(ctx, pool_id):
     share_supply = Amount(share_supply/10**share_asset.precision, share_asset)
     amount_a = Amount(int(data.pop("balance_a"))/10**asset_a.precision, asset_a)
     amount_b = Amount(int(data.pop("balance_b"))/10**asset_b.precision, asset_b)
-    # Share price quoted in component assets.
-    # Note: Pool-Price Assumption assumes share value is twice its
-    # claim on a single component asset.
-    price_a = Price(quote=share_supply, base=(amount_a+amount_a))
-    price_b = Price(quote=share_supply, base=(amount_b+amount_b))
+    withdrawal_fee = int(data.pop("withdrawal_fee_percent"))/10000
+    weight = 2.0 * ((1.0-withdrawal_fee) if discountfee else 1.0)
+    price_a = Price(quote=share_supply, base=(amount_a*weight))
+    price_b = Price(quote=share_supply, base=(amount_b*weight))
     return (price_a, price_b)
 
 def _wait_next_candle(ctx, candle):
