@@ -357,6 +357,8 @@ _candles = {
     "1m": {"hrmod": 1, "minmod": 1, "trigger": 10, "wash": 3},
     "5m": {"hrmod": 1, "minmod": 5, "trigger": 20, "wash": 9},
     "1h": {"hrmod": 1, "minmod": 60, "trigger": 30, "wash": 30},
+    "4h": {"hrmod": 4, "minmod": 60, "trigger": 30, "wash": 30},
+    "6h": {"hrmod": 6, "minmod": 60, "trigger": 30, "wash": 30},
 }
 
 def _callback_dry_run(ctx, param, value):
@@ -488,7 +490,8 @@ def _wait_next_candle(ctx, candle):
         blocktime = ctx.blockchain.info()["time"]
         cur_seconds = int(blocktime.split(":")[-1])
         cur_minmod = int(blocktime.split(":")[-2]) % candle["minmod"]
-        if cur_minmod == 0 and cur_seconds <= candle["trigger"]:
+        cur_hrmod = int(blocktime.split(":")[-3].split("T")[-1]) % candle["hrmod"]
+        if cur_hrmod == 0 and cur_minmod == 0 and cur_seconds <= candle["trigger"]:
             break
         else:
             time.sleep(3)
