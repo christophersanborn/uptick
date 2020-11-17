@@ -418,25 +418,29 @@ def pricewalk(ctx, pools, fee, candle, secondary, logfile, logonly, account):
             candle_name,
             (" [Screen session: %s]"%os.environ["STY"]) if "STY" in os.environ else ""
         ))
-        blocktime = _wait_next_candle(ctx, candle)
-        print("Candle triggered at blocktime %s. Doing stuff..."%blocktime)
-        prices_this_round = []
-        for pool in pools:
-            prices = _get_current_share_prices(ctx, pool["id"], fee)
-            prices = _add_core_price(ctx, prices, secondary)
-            prices_this_round.extend(prices)
-            if not logonly:
-                _wash(ctx, pool["tidbit"], prices, account, candle)
-            else:
-                time.sleep(candle["wash"])
-        logstr = blocktime
-        for pr in prices_this_round:
-            logstr += " %s"%pr
-        print(logstr)
-        if logfile:
-            with open(logfile, 'a') as f:
-                f.write(logstr+"\n")
-        time.sleep(candle["trigger"]) # ensure out of trigger window
+        try:
+            blocktime = _wait_next_candle(ctx, candle)
+            print("Candle triggered at blocktime %s. Doing stuff..."%blocktime)
+            prices_this_round = []
+            for pool in pools:
+                prices = _get_current_share_prices(ctx, pool["id"], fee)
+                prices = _add_core_price(ctx, prices, secondary)
+                prices_this_round.extend(prices)
+                if not logonly:
+                    _wash(ctx, pool["tidbit"], prices, account, candle)
+                else:
+                    time.sleep(candle["wash"])
+            logstr = blocktime
+            for pr in prices_this_round:
+                logstr += " %s"%pr
+            print(logstr)
+            if logfile:
+                with open(logfile, 'a') as f:
+                    f.write(logstr+"\n")
+            time.sleep(candle["trigger"]) # ensure out of trigger window
+        except Exception as e:
+            print("Exception: (%s) - %s"%(str(type(e)), str(e)))
+            time.sleep(candle["trigger"])
 
 def _get_pool_price(ctx, pool_id):
     """ Get asset_a/asset_b price. """
