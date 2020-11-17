@@ -359,6 +359,8 @@ _candles = {
     "1h": {"hrmod": 1, "minmod": 60, "trigger": 30, "wash": 30},
     "4h": {"hrmod": 4, "minmod": 60, "trigger": 30, "wash": 30},
     "6h": {"hrmod": 6, "minmod": 60, "trigger": 30, "wash": 30},
+    "8h": {"hrmod": 8, "minmod": 60, "trigger": 30, "wash": 30},
+    "12h": {"hrmod": 12, "minmod": 60, "trigger": 30, "wash": 30},
 }
 
 def _callback_dry_run(ctx, param, value):
