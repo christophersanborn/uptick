@@ -494,12 +494,18 @@ def _get_current_share_prices(ctx, pool_id, discountfee=False):
 def _wait_next_candle(ctx, candle):
     while True:
         blocktime = ctx.blockchain.info()["time"]
-        cur_seconds = int(blocktime.split(":")[-1])
-        cur_minmod = int(blocktime.split(":")[-2]) % candle["minmod"]
-        cur_hrmod = int(blocktime.split(":")[-3].split("T")[-1]) % candle["hrmod"]
-        if cur_hrmod == 0 and cur_minmod == 0 and cur_seconds <= candle["trigger"]:
+        hms = [int(t) for t in blocktime.split("T")[-1].split(":")]
+        mods = [candle["hrmod"], candle["minmod"], 60]
+        hms_mod = [hms[i]%mods[i] for i in range(3)]
+        hms_remain = [(mods[i] - hms[i] - 1) % mods[i] for i in range(3)]
+        on_the_minute = hms_mod[0]==0 and hms_mod[1]==0
+        cur_seconds = hms_mod[2]
+        if on_the_minute and cur_seconds <= candle["trigger"]:
             break
         else:
+            print("    (T-minus: %02d:%02d:%02d [blocktime: %s])" %
+                  (*hms_remain, blocktime) + "\033[G",
+                  end="", flush=True)
             time.sleep(3)
     return blocktime
 
@@ -509,6 +515,8 @@ def _wash(ctx, tidbit_amnt, pricelist, account, candle):
         pricelist = [pricelist]
 
     ctx.blockchain.blocking = True
+    ctx.blockchain.clear() # Clear 'ref_block_num' cache.
+
     for price in pricelist:
         tx1 = price.market.buy(price, tidbit_amnt, account=account)
         tx2 = price.market.sell(price, tidbit_amnt, account=account)
