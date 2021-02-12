@@ -405,7 +405,7 @@ def pricewalk(ctx, pools, fee, candle, secondary, logfile, logonly, account):
         p = {
             "id": p_id,
             "share_asset": share_asset,
-            "tidbit": Amount(1.0/10**3, share_asset),
+            "tidbit": Amount(1.0/10**2, share_asset),
         }
         print("Trading tidbits of %s on %s candles..."%(p["tidbit"], candle_name))
         pools.append(p)
